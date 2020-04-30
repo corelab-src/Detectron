@@ -64,6 +64,12 @@ class GenerateProposalsOp(object):
         # input image (height, width, scale), in which scale is the scale factor
         # applied to the original dataset image to get the network input image
         im_info = inputs[2].data
+
+        if cfg.RPN.DYNAMIC_RPN_ON:
+            deadline = inputs[-3].data
+            elap_time = inputs[-2].data
+            threshold = inputs[-1].data
+
         # 1. Generate proposals from bbox deltas and shifted anchors
         height, width = scores.shape[-2:]
         # Enumerate all shifted positions on the (H, W) grid
@@ -90,10 +96,17 @@ class GenerateProposalsOp(object):
         rois = np.empty((0, 5), dtype=np.float32)
         roi_probs = np.empty((0, 1), dtype=np.float32)
         for im_i in range(num_images):
-            im_i_boxes, im_i_probs = self.proposals_for_one_image(
-                im_info[im_i, :], all_anchors, bbox_deltas[im_i, :, :, :],
-                scores[im_i, :, :, :]
-            )
+            if not cfg.RPN.DYNAMIC_RPN_ON:
+                im_i_boxes, im_i_probs = self.proposals_for_one_image(
+                    im_info[im_i, :], all_anchors, bbox_deltas[im_i, :, :, :],
+                    scores[im_i, :, :, :]
+                )
+            else:
+                im_i_boxes, im_i_probs = self.dynamic_proposals_for_one_image(
+                    im_info[im_i, :], all_anchors, bbox_deltas[im_i, :, :, :],
+                    scores[im_i, :, :, :], deadline, elap_time, threshold
+                )
+
             batch_inds = im_i * np.ones(
                 (im_i_boxes.shape[0], 1), dtype=np.float32
             )
@@ -170,6 +183,74 @@ class GenerateProposalsOp(object):
             scores = scores[keep]
         return proposals, scores
 
+    def dynamic_proposals_for_one_image(
+        self, im_info, all_anchors, bbox_deltas, scores, deadline, elap_time, threshold
+    ):
+        # Get mode-dependent configuration
+        cfg_key = 'TRAIN' if self._train else 'TEST'
+        pre_nms_topN = cfg[cfg_key].RPN_PRE_NMS_TOP_N
+        post_nms_topN = cfg[cfg_key].RPN_POST_NMS_TOP_N
+
+        if not self._train:
+            post_nms_topN = int(post_nms_topN * (deadline - elap_time / threshold))
+            post_nms_topN = max(cfg[cfg_key].RPN_MIN_POST_NMS_TOP_N, post_nms_topN)
+            post_nms_topN = min(cfg[cfg_key].RPN_MAX_POST_NMS_TOP_N, post_nms_topN)
+
+        nms_thresh = cfg[cfg_key].RPN_NMS_THRESH
+        min_size = cfg[cfg_key].RPN_MIN_SIZE
+        # Transpose and reshape predicted bbox transformations to get them
+        # into the same order as the anchors:
+        #   - bbox deltas will be (4 * A, H, W) format from conv output
+        #   - transpose to (H, W, 4 * A)
+        #   - reshape to (H * W * A, 4) where rows are ordered by (H, W, A)
+        #     in slowest to fastest order to match the enumerated anchors
+        bbox_deltas = bbox_deltas.transpose((1, 2, 0)).reshape((-1, 4))
+
+        # Same story for the scores:
+        #   - scores are (A, H, W) format from conv output
+        #   - transpose to (H, W, A)
+        #   - reshape to (H * W * A, 1) where rows are ordered by (H, W, A)
+        #     to match the order of anchors and bbox_deltas
+        scores = scores.transpose((1, 2, 0)).reshape((-1, 1))
+
+        # 4. sort all (proposal, score) pairs by score from highest to lowest
+        # 5. take top pre_nms_topN (e.g. 6000)
+        if pre_nms_topN <= 0 or pre_nms_topN >= len(scores):
+            order = np.argsort(-scores.squeeze())
+        else:
+            # Avoid sorting possibly large arrays; First partition to get top K
+            # unsorted and then sort just those (~20x faster for 200k scores)
+            inds = np.argpartition(
+                -scores.squeeze(), pre_nms_topN
+            )[:pre_nms_topN]
+            order = np.argsort(-scores[inds].squeeze())
+            order = inds[order]
+        bbox_deltas = bbox_deltas[order, :]
+        all_anchors = all_anchors[order, :]
+        scores = scores[order]
+
+        # Transform anchors into proposals via bbox transformations
+        proposals = box_utils.bbox_transform(all_anchors, bbox_deltas, self._reg_weights)
+
+        # 2. clip proposals to image (may result in proposals with zero area
+        # that will be removed in the next step)
+        proposals = box_utils.clip_tiled_boxes(proposals, im_info[:2])
+
+        # 3. remove predicted boxes with either height or width < min_size
+        keep = _filter_boxes(proposals, min_size, im_info)
+        proposals = proposals[keep, :]
+        scores = scores[keep]
+
+        # 6. apply loose nms (e.g. threshold = 0.7)
+        # 7. take after_nms_topN (e.g. 300)
+        # 8. return the top proposals (-> RoIs top)
+        if nms_thresh > 0:
+            keep = box_utils.nms(np.hstack((proposals, scores)), nms_thresh)
+            if post_nms_topN > 0:
+                keep = keep[:post_nms_topN]
+            proposals = proposals[keep, :]
+            scores = scores[keep]
+        return proposals, scores
 
 def _filter_boxes(boxes, min_size, im_info):
     """Only keep boxes with both sides >= min_size and center within the image.

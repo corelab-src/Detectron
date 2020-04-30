@@ -34,6 +34,7 @@ import logging
 import numpy as np
 import os
 import re
+import random
 
 from caffe2.python import memonger
 from caffe2.python import workspace
@@ -59,7 +60,30 @@ def train_model():
     training_stats = TrainingStats(model)
     CHECKPOINT_PERIOD = int(cfg.TRAIN.SNAPSHOT_ITERS / cfg.NUM_GPUS)
 
+    for i in range(0, cfg.NUM_GPUS):
+        workspace.FeedBlob('gpu_{}/deadline'.format(i), np.array(2))
+        workspace.FeedBlob('gpu_{}/res3_1_threshold'.format(i), np.array(0))
+        workspace.FeedBlob('gpu_{}/res3_2_threshold'.format(i), np.array(0))
+        workspace.FeedBlob('gpu_{}/res4_1_threshold'.format(i), np.array(0))
+        workspace.FeedBlob('gpu_{}/res4_2_threshold'.format(i), np.array(0))
+        workspace.FeedBlob('gpu_{}/res4_3_threshold'.format(i), np.array(0))
+        workspace.FeedBlob('gpu_{}/res4_4_threshold'.format(i), np.array(0))
+        workspace.FeedBlob('gpu_{}/res4_5_threshold'.format(i), np.array(0))
+        workspace.FeedBlob('gpu_{}/head_conv_threshold'.format(i), np.array(0))
+
     for cur_iter in range(start_iter, cfg.SOLVER.MAX_ITER):
+        for i in range(0, cfg.NUM_GPUS):
+            workspace.FeedBlob('gpu_{}/res3_1_time'.format(i), np.array(random.randrange(1,3)))
+            workspace.FeedBlob('gpu_{}/res3_2_time'.format(i), np.array(random.randrange(1,3)))
+            workspace.FeedBlob('gpu_{}/res4_1_time'.format(i), np.array(random.randrange(1,3)))
+            workspace.FeedBlob('gpu_{}/res4_2_time'.format(i), np.array(random.randrange(1,3)))
+            workspace.FeedBlob('gpu_{}/res4_3_time'.format(i), np.array(random.randrange(1,3)))
+            workspace.FeedBlob('gpu_{}/res4_4_time'.format(i), np.array(random.randrange(1,3)))
+            workspace.FeedBlob('gpu_{}/res4_5_time'.format(i), np.array(random.randrange(1,3)))
+
+            num_of_subnets = len(cfg.FAST_RCNN.MULTI_CONV_HEAD_DIMS)
+            workspace.FeedBlob('gpu_{}/head_conv_time'.format(i), np.array(random.randrange(1,num_of_subnets+1)))
+
         if model.roi_data_loader.has_stopped():
             handle_critical_error(model, 'roi_data_loader failed')
         training_stats.IterTic()

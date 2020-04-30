@@ -22,6 +22,7 @@ from __future__ import unicode_literals
 
 import numpy as np
 import logging
+import copy
 
 from caffe2.python import cnn
 from caffe2.python import core
@@ -64,6 +65,12 @@ class DetectionModelHelper(cnn.CNNModelHelper):
         self.net.Proto().num_workers = cfg.NUM_GPUS * 4
         self.prev_use_cudnn = self.use_cudnn
         self.gn_params = []  # Param on this list are GroupNorm parameters
+
+        self.deadline = self.CreateSingleParam('deadline')
+
+        if not self.train:
+            self.TimerBegin([], 'start_time', control_input = ['gpu_0/data'])
+            self.TimerGetAndEnd(model.timer, 'exec_time', control_input = ['gpu_0/cls_prob', 'gpu_0/bbox_pred'])
 
     def TrainableParams(self, gpu_id=-1):
         """Get the blob names for all trainable parameters, possibly filtered by
@@ -161,9 +168,25 @@ class DetectionModelHelper(cnn.CNNModelHelper):
             name = 'GenerateProposalsOp:' + ','.join([str(b) for b in blobs_in])
             # spatial_scale passed to the Python op is only used in
             # convert_pkl_to_pb
-            self.net.Python(
-                GenerateProposalsOp(anchors, spatial_scale, self.train).forward
-            )(blobs_in, blobs_out, name=name, spatial_scale=spatial_scale)
+            if not cfg.RPN.DYNAMIC_RPN_ON:
+                self.net.Python(
+                    GenerateProposalsOp(anchors, spatial_scale, self.train).forward
+                )(blobs_in, blobs_out, name=name, spatial_scale=spatial_scale)
+            else:
+                if not self.train:
+                    elap_time = self.TimerGet(model.timer, 'rpn_time',
+                        control_input = blobs_in,
+                        device_option=core.DeviceOption(caffe2_pb2.CPU))
+                else:
+                    elap_time = self.CreateSingleParam('rpn_time')
+
+                threshold = self.CreateSingleParam('rpn_threshold')
+
+                blobs_in += [self.deadline, elap_time, threshold ]
+                self.net.Python(
+                    GenerateProposalsOp(anchors, spatial_scale, self.train).forward
+                )(blobs_in, blobs_out, name=name, spatial_scale=spatial_scale)
+
 
         return blobs_out
 
@@ -248,6 +271,12 @@ class DetectionModelHelper(cnn.CNNModelHelper):
             is_training=self.train
         )
         blobs_out = [core.ScopedBlobReference(b) for b in blobs_out]
+
+        if cfg.RPN.DYNAMIC_RPN_ON:
+            elap_time = self.CreateSingleParam('rpn_time')
+            threshold = self.CreateSingleParam('rpn_threshold')
+
+            blobs_in += [self.deadline, elap_time, threshold]
 
         outputs = self.net.Python(
             CollectAndDistributeFpnRpnProposalsOp(self.train).forward
@@ -563,6 +592,26 @@ class DetectionModelHelper(cnn.CNNModelHelper):
             metrics = [metrics]
         self.metrics = list(set(self.metrics + metrics))
 
+    def CreateSubmodel(self, subnet_name):
+        submodel = copy.copy(self)
+        submodel.net = core.Net(subnet_name)
+        return submodel
+
+    def CreateSingleParam(self, param_name):
+        if not self.init_params:
+            SelectInitializer = initializers.ExternalInitializer()
+        else:
+            SelectInitializer = initializers.update_initializer(
+                None, None, ("ConstantFill", {'value': 0}))
+
+        param = self.create_param(
+            param_name=param_name,
+            shape=[1],
+            initializer=SelectInitializer,
+            tags=ParameterTags.COMPUTED_PARAM
+        )
+
+        return param
 
 def _get_lr_change_ratio(cur_lr, new_lr):
     eps = 1e-10

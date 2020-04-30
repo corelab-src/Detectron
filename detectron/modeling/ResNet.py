@@ -26,6 +26,7 @@ from __future__ import unicode_literals
 from detectron.core.config import cfg
 from detectron.utils.net import get_group_gn
 
+from caffe2.python import brew
 
 # ---------------------------------------------------------------------------- #
 # Bits for specific architectures (ResNet50, ResNet101, ...)
@@ -66,14 +67,15 @@ def add_stage(
     dim_out,
     dim_inner,
     dilation,
-    stride_init=2
+    stride_init=2,
+    prefix_offset=0
 ):
     """Add a ResNet stage to the model by stacking n residual blocks."""
     # e.g., prefix = res2
     for i in range(n):
         blob_in = add_residual_block(
             model,
-            '{}_{}'.format(prefix, i),
+            '{}_{}'.format(prefix, prefix_offset + i),
             blob_in,
             dim_in,
             dim_out,
@@ -389,3 +391,142 @@ def bottleneck_gn_transformation(
         pad=0,
     )
     return cur
+
+# ---------------------------------------------------------------------------- #
+# Skipping ResNet Implementation
+# ---------------------------------------------------------------------------- #
+
+def add_skipping_ResNet50_conv5_body(model):
+    return add_skipping_ResNet_convX_body(model, ([3], [2, 2], [2, 2, 2], [3]))
+
+def add_skipping_ResNet101_conv5_body(model):
+    return add_skipping_ResNet_convX_body(model, ([3], [2, 2], [4, 4, 4, 4, 3], [3]))
+
+def add_skipping_ResNet152_conv5_body(model):
+    return add_skipping_ResNet_convX_body(model, ([3], [3, 3, 2], [6, 6, 6, 6, 6, 6], [3]))
+
+def add_skipping_ResNet_convX_body(model, block_counts):
+    freeze_at = cfg.TRAIN.FREEZE_AT
+    assert freeze_at in [0, 2, 3, 4, 5]
+
+    # add the stem (by default, conv1 and pool1 with bn; can support gn)
+    p, dim_in = globals()[cfg.RESNETS.STEM_FUNC](model, 'data')
+
+    dim_bottleneck = cfg.RESNETS.NUM_GROUPS * cfg.RESNETS.WIDTH_PER_GROUP
+    n1_counts, n2_counts, n3_counts = block_counts[:3]
+
+    block_offset = 0
+    for i, n in enumerate(n1_counts):
+        if i == 0:
+            # do not add a skip operator to the first set of blocks in a stage
+            s, dim_in = add_stage(
+                model, 'res2', p, n, dim_in, 256, dim_bottleneck, 1
+            )
+
+        else:
+            prefix = 'res2_{}'.format(i)
+
+            s, dim_in = add_stage_with_skip(
+                model, prefix, s, n, dim_in, 256, dim_bottleneck, 1, block_offset
+            )
+
+        block_offset += n
+
+    if freeze_at == 2:
+        model.StopGradient(s, s)
+
+    block_offset = 0
+    for i, n in enumerate(n2_counts):
+        if i == 0:
+            # do not add a skip operator to the first set of blocks in a stage
+            s, dim_in = add_stage(
+                model, 'res3', s, n, dim_in, 512, dim_bottleneck * 2, 1
+            )
+        else:
+            prefix = 'res3_{}'.format(i)
+
+            s, dim_in = add_stage_with_skip(
+                model, prefix, s, n, dim_in, 512, dim_bottleneck * 2, 1, block_offset
+            )
+
+        block_offset += n
+
+    if freeze_at == 3:
+        model.StopGradient(s, s)
+
+    block_offset = 0
+    for i, n in enumerate(n3_counts):
+        if i == 0:
+            # do not add a skip operator to the first set of blocks in a stage
+            s, dim_in = add_stage(
+                model, 'res4', s, n, dim_in, 1024, dim_bottleneck * 4, 1
+            )
+        else:
+            prefix = 'res4_{}'.format(i)
+
+            s, dim_in = add_stage_with_skip(
+                model, prefix, s, n, dim_in, 1024, dim_bottleneck * 4, 1, block_offset
+            )
+
+        block_offset += n
+
+    if freeze_at == 4:
+        model.StopGradient(s, s)
+
+    if len(block_counts) == 4:
+        n4_counts = block_counts[3]
+
+        block_offset = 0
+        for i, n in enumerate(n4_counts):
+            if i == 0:
+                s, dim_in = add_stage(
+                    model, 'res5', s, n, dim_in, 2048, dim_bottleneck * 8,
+                    cfg.RESNETS.RES5_DILATION
+                )
+
+            else:
+                prefix = 'res5_{}'.format(i)
+
+                s, dim_in = add_stage_with_skip(
+                    model, prefix, s, n, dim_in, 2048, dim_bottleneck * 8,
+                    cfg.RESNETS.RES5_DILATION, block_offset
+                )
+
+            block_offset += n
+
+        if freeze_at == 5:
+            model.StopGradient(s, s)
+
+        return s, dim_in, 1. / 32. * cfg.RESNETS.RES5_DILATION
+    else:
+        return s, dim_in, 1. / 16.
+
+def add_stage_with_skip(
+    model,
+    prefix,
+    blob_in,
+    n,
+    dim_in,
+    dim_out,
+    dim_inner,
+    dilation,
+    offset
+):
+    if not model.train:
+        elap_time = model.TimerGet(model.timer, prefix + '_time',
+            control_input = [blob_in], device_option=core.DeviceOption(caffe2_pb2.CPU))
+    else:
+        elap_time = model.CreateSingleParam(prefix + '_time')
+
+    submodel = model.CreateSubmodel(prefix)
+    s, dim_in = add_stage(
+        submodel, prefix[0:4], blob_in, n, dim_in, dim_out, dim_inner, dilation,
+        prefix_offset = offset
+    )
+
+    threshold = model.CreateSingleParam(prefix + '_threshold')
+    s = brew.skip(model, [model.deadline, elap_time, threshold],
+        submodel.net.external_inputs, submodel,
+        [prefix + '_skip'], [s], [blob_in])
+
+    return s, dim_in

@@ -38,39 +38,96 @@ from detectron.utils.c2 import gauss_fill
 from detectron.utils.net import get_group_gn
 import detectron.utils.blob as blob_utils
 
+from caffe2.python import brew
 
 # ---------------------------------------------------------------------------- #
 # Fast R-CNN outputs and losses
 # ---------------------------------------------------------------------------- #
 
 def add_fast_rcnn_outputs(model, blob_in, dim):
-    """Add RoI classification and bounding box regression output ops."""
-    # Box classification layer
-    model.FC(
-        blob_in,
-        'cls_score',
-        dim,
-        model.num_classes,
-        weight_init=gauss_fill(0.01),
-        bias_init=const_fill(0.0)
-    )
-    if not model.train:  # == if test
-        # Only add softmax when testing; during training the softmax is combined
-        # with the label cross entropy loss for numerical stability
-        model.Softmax('cls_score', 'cls_prob', engine='CUDNN')
-    # Box regression layer
-    num_bbox_reg_classes = (
-        2 if cfg.MODEL.CLS_AGNOSTIC_BBOX_REG else model.num_classes
-    )
-    model.FC(
-        blob_in,
-        'bbox_pred',
-        dim,
-        num_bbox_reg_classes * 4,
-        weight_init=gauss_fill(0.001),
-        bias_init=const_fill(0.0)
-    )
+    if not cfg.FAST_RCNN.MULTI_ROI_BOX_HEAD:
+        """Add RoI classification and bounding box regression output ops."""
+        # Box classification layer
+        model.FC(
+            blob_in,
+            'cls_score',
+            dim,
+            model.num_classes,
+            weight_init=gauss_fill(0.01),
+            bias_init=const_fill(0.0)
+        )
+        if not model.train:  # == if test
+            # Only add softmax when testing; during training the softmax is combined
+            # with the label cross entropy loss for numerical stability
+            model.Softmax('cls_score', 'cls_prob', engine='CUDNN')
+        # Box regression layer
+        num_bbox_reg_classes = (
+            2 if cfg.MODEL.CLS_AGNOSTIC_BBOX_REG else model.num_classes
+        )
+        model.FC(
+            blob_in,
+            'bbox_pred',
+            dim,
+            num_bbox_reg_classes * 4,
+            weight_init=gauss_fill(0.001),
+            bias_init=const_fill(0.0)
+        )
+    else:
+        submodels = []
+        blob_output_map = {}
 
+        external_blobs = []
+
+        for hidden_dim in cfg.FAST_RCNN.MULTI_CONV_HEAD_DIMS:
+            prefix = 'head_conv_output' + str(hidden_dim)
+            submodel = model.CreateSubmodel(prefix)
+
+            # Box classification layer
+            cls_score = submodel.FC(
+                blob_in,
+                prefix + '_cls_score',
+                dim,
+                model.num_classes,
+                weight_init=gauss_fill(0.01),
+                bias_init=const_fill(0.0)
+            )
+            if not model.train:  # == if test
+                # Only add softmax when testing; during training the softmax is combined
+                # with the label cross entropy loss for numerical stability
+                cls_prob = submodel.Softmax(prefix + '_cls_score', prefix + '_cls_prob', engine='CUDNN')
+            # Box regression layer
+            num_bbox_reg_classes = (
+                2 if cfg.MODEL.CLS_AGNOSTIC_BBOX_REG else model.num_classes
+            )
+
+            bbox_pred = submodel.FC(
+                blob_in,
+                prefix + '_bbox_pred',
+                dim,
+                num_bbox_reg_classes * 4,
+                weight_init=gauss_fill(0.001),
+                bias_init=const_fill(0.0)
+            )
+
+            submodels.append(submodel)
+            if not model.train:
+                blob_output_map[submodel.net] = [ cls_score, cls_prob, bbox_pred ]
+            else:
+                blob_output_map[submodel.net] = [ cls_score, bbox_pred ]
+
+            external_blobs += submodel.net.external_inputs
+
+        if not model.train:
+            blob_output_map[model.net] = ['cls_score', 'cls_prob', 'bbox_pred']
+        else:
+            blob_output_map[model.net] = ['cls_score', 'bbox_pred']
+
+        elap_time = model.CreateSingleParam('head_conv_time')
+        threshold = model.CreateSingleParam('head_conv_threshold')
+
+        brew.switch(model, [model.deadline, elap_time, threshold],
+            external_blobs, submodels, blob_output_map
+        )
 
 def add_fast_rcnn_losses(model):
     """Add losses for RoI classification and bounding box regression."""
@@ -149,8 +206,6 @@ def add_roi_Xconv1fc_head(model, blob_in, dim_in, spatial_scale):
 
 
 def add_roi_Xconv1fc_gn_head(model, blob_in, dim_in, spatial_scale):
-    """Add a X conv + 1fc head, with GroupNorm"""
-    hidden_dim = cfg.FAST_RCNN.CONV_HEAD_DIM
     roi_size = cfg.FAST_RCNN.ROI_XFORM_RESOLUTION
     roi_feat = model.RoIFeatureTransform(
         blob_in, 'roi_feat',
@@ -161,18 +216,70 @@ def add_roi_Xconv1fc_gn_head(model, blob_in, dim_in, spatial_scale):
         spatial_scale=spatial_scale
     )
 
-    current = roi_feat
-    for i in range(cfg.FAST_RCNN.NUM_STACKED_CONVS):
-        current = model.ConvGN(
-            current, 'head_conv' + str(i + 1), dim_in, hidden_dim, 3,
-            group_gn=get_group_gn(hidden_dim),
-            stride=1, pad=1,
-            weight_init=('MSRAFill', {}),
-            bias_init=('ConstantFill', {'value': 0.}))
-        current = model.Relu(current, current)
-        dim_in = hidden_dim
+    if not cfg.FAST_RCNN.MULTI_ROI_BOX_HEAD:
+        """Add a X conv + 1fc head, with GroupNorm"""
+        hidden_dim = cfg.FAST_RCNN.CONV_HEAD_DIM
 
-    fc_dim = cfg.FAST_RCNN.MLP_HEAD_DIM
-    model.FC(current, 'fc6', dim_in * roi_size * roi_size, fc_dim)
-    model.Relu('fc6', 'fc6')
-    return 'fc6', fc_dim
+        current = roi_feat
+        for i in range(cfg.FAST_RCNN.NUM_STACKED_CONVS):
+            current = model.ConvGN(
+                current, 'head_conv' + str(i + 1), dim_in, hidden_dim, 3,
+                group_gn=get_group_gn(hidden_dim),
+                stride=1, pad=1,
+                weight_init=('MSRAFill', {}),
+                bias_init=('ConstantFill', {'value': 0.}))
+            current = model.Relu(current, current)
+            dim_in = hidden_dim
+
+        fc_dim = cfg.FAST_RCNN.MLP_HEAD_DIM
+        fc = model.FC(current, 'fc6', dim_in * roi_size * roi_size, fc_dim)
+        fc = model.Relu(fc, fc)
+
+    else:
+        submodels = []
+        blob_output_map = {}
+
+        external_blobs = []
+
+        for hidden_dim in cfg.FAST_RCNN.MULTI_CONV_HEAD_DIMS:
+            prefix = 'head_conv_' + str(hidden_dim)
+            submodel = model.CreateSubmodel(prefix)
+
+            current = roi_feat
+            sub_dim_in = dim_in
+
+            for i in range(cfg.FAST_RCNN.NUM_STACKED_CONVS):
+                current = submodel.ConvGN(
+                    current, prefix + str(i + 1), sub_dim_in, hidden_dim, 3,
+                    group_gn=get_group_gn(hidden_dim),
+                    stride=1, pad=1,
+                    weight_init=('MSRAFill', {}),
+                    bias_init=('ConstantFill', {'value': 0.}))
+                current = submodel.Relu(current, current)
+                sub_dim_in = hidden_dim
+
+            fc_dim = cfg.FAST_RCNN.MLP_HEAD_DIM
+
+            sub_fc = submodel.FC(current, prefix + '_fc6', sub_dim_in * roi_size * roi_size, fc_dim)
+            submodel.Relu(sub_fc, sub_fc)
+
+            submodels.append(submodel)
+            blob_output_map[submodel.net] = [sub_fc]
+
+            external_blobs += submodel.net.external_inputs
+
+        blob_output_map[model.net] = ['fc6']
+
+        if not model.train:
+            elap_time = model.TimerGet(model.timer, 'head_conv_time',
+                control_input = [roi_feat], device_option=core.DeviceOption(caffe2_pb2.CPU))
+        else:
+            elap_time = model.CreateSingleParam('head_conv_time')
+
+        threshold = model.CreateSingleParam('head_conv_threshold')
+
+        fc = brew.switch(model, [model.deadline, elap_time, threshold],
+            external_blobs, submodels, blob_output_map
+        )
+
+    return fc, fc_dim

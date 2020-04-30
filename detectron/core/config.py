@@ -262,6 +262,10 @@ __C.TEST.RPN_PRE_NMS_TOP_N = 12000
 # cases)
 __C.TEST.RPN_POST_NMS_TOP_N = 2000
 
+__C.TEST.RPN_MIN_POST_NMS_TOP_N = 600
+
+__C.TEST.RPN_MAX_POST_NMS_TOP_N = 2000
+
 # Proposal height and width both need to be greater than RPN_MIN_SIZE
 # (at orig image scale; not scale used during training or inference)
 __C.TEST.RPN_MIN_SIZE = 0
@@ -656,6 +660,10 @@ __C.FAST_RCNN = AttrDict()
 # (e.g., 'head_builder.add_roi_2mlp_head' to specify a two hidden layer MLP)
 __C.FAST_RCNN.ROI_BOX_HEAD = ''
 
+__C.FAST_RCNN.MULTI_ROI_BOX_HEAD = False
+
+__C.FAST_RCNN.MULTI_CONV_HEAD_DIMS = (256, 192)
+
 # Hidden layer dimension when using an MLP for the RoI box head
 __C.FAST_RCNN.MLP_HEAD_DIM = 1024
 
@@ -686,6 +694,8 @@ __C.RPN = AttrDict()
 # [Infered value; do not set directly in a config]
 # Indicates that the model contains an RPN subnetwork
 __C.RPN.RPN_ON = False
+
+__C.RPN.DYNAMIC_RPN_ON = False
 
 # RPN anchor sizes given in absolute pixels w.r.t. the scaled network input
 # Note: these options are *not* used by FPN RPN; see FPN.RPN* options

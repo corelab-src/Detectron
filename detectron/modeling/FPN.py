@@ -72,6 +72,10 @@ def add_fpn_ResNet101_conv5_P2only_body(model):
         P2only=True
     )
 
+def add_fpn_skipping_ResNet101_conv5_body(model):
+    return add_fpn_onto_conv_body(
+        model, ResNet.add_skipping_ResNet101_conv5_body, fpn_level_info_skipping_ResNet101_conv5,
+    )
 
 def add_fpn_ResNet152_conv5_body(model):
     return add_fpn_onto_conv_body(
@@ -559,10 +563,30 @@ def fpn_level_info_ResNet101_conv5():
         spatial_scales=(1. / 32., 1. / 16., 1. / 8., 1. / 4.)
     )
 
-
 def fpn_level_info_ResNet152_conv5():
     return FpnLevelInfo(
         blobs=('res5_2_sum', 'res4_35_sum', 'res3_7_sum', 'res2_2_sum'),
+        dims=(2048, 1024, 512, 256),
+        spatial_scales=(1. / 32., 1. / 16., 1. / 8., 1. / 4.)
+    )
+
+def fpn_level_info_skipping_ResNet50_conv5():
+    return FpnLevelInfo(
+        blobs=('res5_2_sum', 'res4_2_skip', 'res3_1_skip', 'res2_2_sum'),
+        dims=(2048, 1024, 512, 256),
+        spatial_scales=(1. / 32., 1. / 16., 1. / 8., 1. / 4.)
+    )
+
+def fpn_level_info_skipping_ResNet101_conv5():
+    return FpnLevelInfo(
+        blobs=('res5_2_sum', 'res4_4_skip', 'res3_1_skip', 'res2_2_sum'),
+        dims=(2048, 1024, 512, 256),
+        spatial_scales=(1. / 32., 1. / 16., 1. / 8., 1. / 4.)
+    )
+
+def fpn_level_info_skipping_ResNet152_conv5():
+    return FpnLevelInfo(
+        blobs=('res5_2_sum', 'res4_5_skip', 'res3_2_skip', 'res2_2_sum'),
         dims=(2048, 1024, 512, 256),
         spatial_scales=(1. / 32., 1. / 16., 1. / 8., 1. / 4.)
     )
