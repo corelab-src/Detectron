@@ -172,16 +172,16 @@ class DetectionModelHelper(cnn.CNNModelHelper):
                     GenerateProposalsOp(anchors, spatial_scale, self.train).forward
                 )(blobs_in, blobs_out, name=name, spatial_scale=spatial_scale)
             else:
-                deadline = self.CreateSingleParam('deadline')
+                deadline = self.GetSingleParam('deadline')
 
                 if not self.train:
                     elap_time = self.TimerGet(self.timer, 'rpn_time',
                         control_input = blobs_in,
                         device_option=core.DeviceOption(caffe2_pb2.CPU))
                 else:
-                    elap_time = self.CreateSingleParam('rpn_time')
+                    elap_time = self.GetSingleParam('rpn_time')
 
-                threshold = self.CreateSingleParam('rpn_threshold')
+                threshold = self.GetSingleParam('rpn_threshold')
 
                 blobs_in += [deadline, elap_time, threshold ]
                 self.net.Python(
@@ -274,9 +274,9 @@ class DetectionModelHelper(cnn.CNNModelHelper):
         blobs_out = [core.ScopedBlobReference(b) for b in blobs_out]
 
         if cfg.RPN.DYNAMIC_RPN_ON:
-            deadline = self.CreateSingleParam('deadline')
-            elap_time = self.CreateSingleParam('rpn_time')
-            threshold = self.CreateSingleParam('rpn_threshold')
+            deadline = self.GetSingleParam('deadline')
+            elap_time = self.GetSingleParam('rpn_time')
+            threshold = self.GetSingleParam('rpn_threshold')
 
             blobs_in += [deadline, elap_time, threshold]
 
@@ -599,7 +599,7 @@ class DetectionModelHelper(cnn.CNNModelHelper):
         submodel.net = core.Net(subnet_name)
         return submodel
 
-    def CreateSingleParam(self, param_name):
+    def GetSingleParam(self, param_name):
         if not self.init_params:
             SelectInitializer = initializers.ExternalInitializer()
         else:

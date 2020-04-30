@@ -517,7 +517,7 @@ def add_stage_with_skip(
         elap_time = model.TimerGet(model.timer, prefix + '_time',
             control_input = [blob_in], device_option=core.DeviceOption(caffe2_pb2.CPU))
     else:
-        elap_time = model.CreateSingleParam(prefix + '_time')
+        elap_time = model.GetSingleParam(prefix + '_time')
 
     submodel = model.CreateSubmodel(prefix)
     s, dim_in = add_stage(
@@ -525,8 +525,8 @@ def add_stage_with_skip(
         prefix_offset = offset
     )
 
-    deadline = model.CreateSingleParam('deadline')
-    threshold = model.CreateSingleParam(prefix + '_threshold')
+    deadline = model.GetSingleParam('deadline')
+    threshold = model.GetSingleParam(prefix + '_threshold')
     s = brew.skip(model, [deadline, elap_time, threshold],
         submodel.net.external_inputs, submodel,
         [prefix + '_skip'], [s], [blob_in])
