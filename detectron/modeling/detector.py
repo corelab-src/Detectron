@@ -72,7 +72,7 @@ class DetectionModelHelper(cnn.CNNModelHelper):
 
         if not self.train:
             self.timer = self.TimerBegin([], 'start_time', control_input = ['gpu_0/data'])
-            self.TimerGetAndEnd(self.timer, 'end_time', control_input = ['gpu_0/cls_prob', 'gpu_0/bbox_pred'])
+            #self.TimerGetAndEnd(self.timer, 'end_time', control_input = ['gpu_0/cls_prob', 'gpu_0/bbox_pred'])
 
     def TrainableParams(self, gpu_id=-1):
         """Get the blob names for all trainable parameters, possibly filtered by
