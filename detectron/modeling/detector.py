@@ -30,6 +30,8 @@ from caffe2.python import workspace
 from caffe2.python.modeling import initializers
 from caffe2.python.modeling.parameter_info import ParameterTags
 
+from caffe2.proto import caffe2_pb2
+
 from detectron.core.config import cfg
 from detectron.ops.collect_and_distribute_fpn_rpn_proposals \
     import CollectAndDistributeFpnRpnProposalsOp
@@ -69,8 +71,8 @@ class DetectionModelHelper(cnn.CNNModelHelper):
         self.deadline = self.CreateSingleParam('deadline')
 
         if not self.train:
-            self.TimerBegin([], 'start_time', control_input = ['gpu_0/data'])
-            self.TimerGetAndEnd(model.timer, 'exec_time', control_input = ['gpu_0/cls_prob', 'gpu_0/bbox_pred'])
+            self.timer = self.TimerBegin([], 'start_time', control_input = ['gpu_0/data'])
+            self.TimerGetAndEnd(self.timer, 'end_time', control_input = ['gpu_0/cls_prob', 'gpu_0/bbox_pred'])
 
     def TrainableParams(self, gpu_id=-1):
         """Get the blob names for all trainable parameters, possibly filtered by
@@ -174,7 +176,7 @@ class DetectionModelHelper(cnn.CNNModelHelper):
                 )(blobs_in, blobs_out, name=name, spatial_scale=spatial_scale)
             else:
                 if not self.train:
-                    elap_time = self.TimerGet(model.timer, 'rpn_time',
+                    elap_time = self.TimerGet(self.timer, 'rpn_time',
                         control_input = blobs_in,
                         device_option=core.DeviceOption(caffe2_pb2.CPU))
                 else:

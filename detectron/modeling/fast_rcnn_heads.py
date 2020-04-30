@@ -38,7 +38,8 @@ from detectron.utils.c2 import gauss_fill
 from detectron.utils.net import get_group_gn
 import detectron.utils.blob as blob_utils
 
-from caffe2.python import brew
+from caffe2.python import core, brew
+from caffe2.proto import caffe2_pb2
 
 # ---------------------------------------------------------------------------- #
 # Fast R-CNN outputs and losses

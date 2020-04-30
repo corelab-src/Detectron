@@ -26,7 +26,8 @@ from __future__ import unicode_literals
 from detectron.core.config import cfg
 from detectron.utils.net import get_group_gn
 
-from caffe2.python import brew
+from caffe2.python import core, brew
+from caffe2.proto import caffe2_pb2
 
 # ---------------------------------------------------------------------------- #
 # Bits for specific architectures (ResNet50, ResNet101, ...)
