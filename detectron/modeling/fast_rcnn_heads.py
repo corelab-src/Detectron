@@ -123,10 +123,11 @@ def add_fast_rcnn_outputs(model, blob_in, dim):
         else:
             blob_output_map[model.net] = ['cls_score', 'bbox_pred']
 
+        deadline = model.CreateSingleParam('deadline')
         elap_time = model.CreateSingleParam('head_conv_time')
         threshold = model.CreateSingleParam('head_conv_threshold')
 
-        brew.switch(model, [model.deadline, elap_time, threshold],
+        brew.switch(model, [deadline, elap_time, threshold],
             external_blobs, submodels, blob_output_map
         )
 
@@ -271,6 +272,8 @@ def add_roi_Xconv1fc_gn_head(model, blob_in, dim_in, spatial_scale):
 
         blob_output_map[model.net] = ['fc6']
 
+        deadline = model.CreateSingleParam('deadline')
+
         if not model.train:
             elap_time = model.TimerGet(model.timer, 'head_conv_time',
                 control_input = [roi_feat], device_option=core.DeviceOption(caffe2_pb2.CPU))
@@ -279,7 +282,7 @@ def add_roi_Xconv1fc_gn_head(model, blob_in, dim_in, spatial_scale):
 
         threshold = model.CreateSingleParam('head_conv_threshold')
 
-        fc = brew.switch(model, [model.deadline, elap_time, threshold],
+        fc = brew.switch(model, [deadline, elap_time, threshold],
             external_blobs, submodels, blob_output_map
         )
 

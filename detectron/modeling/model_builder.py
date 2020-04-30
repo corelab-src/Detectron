@@ -227,6 +227,10 @@ def build_generic_detection_model(
             return None
 
     optim.build_data_parallel_model(model, _single_gpu_build_func)
+
+    if not model.train:
+        model.TimerGetAndEnd(model.timer, 'end_time', control_input = ['gpu_0/cls_score', 'gpu_0/cls_prob', 'gpu_0/bbox_pred'])
+
     return model
 
 

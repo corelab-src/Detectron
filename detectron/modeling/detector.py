@@ -68,11 +68,8 @@ class DetectionModelHelper(cnn.CNNModelHelper):
         self.prev_use_cudnn = self.use_cudnn
         self.gn_params = []  # Param on this list are GroupNorm parameters
 
-        self.deadline = self.CreateSingleParam('deadline')
-
         if not self.train:
-            self.timer = self.TimerBegin([], 'start_time', control_input = ['gpu_0/data'])
-            #self.TimerGetAndEnd(self.timer, 'end_time', control_input = ['gpu_0/cls_prob', 'gpu_0/bbox_pred'])
+            self.timer = self.TimerBegin([], 'start_time', control_input = 'gpu_0/data')
 
     def TrainableParams(self, gpu_id=-1):
         """Get the blob names for all trainable parameters, possibly filtered by
@@ -175,6 +172,8 @@ class DetectionModelHelper(cnn.CNNModelHelper):
                     GenerateProposalsOp(anchors, spatial_scale, self.train).forward
                 )(blobs_in, blobs_out, name=name, spatial_scale=spatial_scale)
             else:
+                deadline = self.CreateSingleParam('deadline')
+
                 if not self.train:
                     elap_time = self.TimerGet(self.timer, 'rpn_time',
                         control_input = blobs_in,
@@ -184,7 +183,7 @@ class DetectionModelHelper(cnn.CNNModelHelper):
 
                 threshold = self.CreateSingleParam('rpn_threshold')
 
-                blobs_in += [self.deadline, elap_time, threshold ]
+                blobs_in += [deadline, elap_time, threshold ]
                 self.net.Python(
                     GenerateProposalsOp(anchors, spatial_scale, self.train).forward
                 )(blobs_in, blobs_out, name=name, spatial_scale=spatial_scale)
@@ -275,10 +274,11 @@ class DetectionModelHelper(cnn.CNNModelHelper):
         blobs_out = [core.ScopedBlobReference(b) for b in blobs_out]
 
         if cfg.RPN.DYNAMIC_RPN_ON:
+            deadline = self.CreateSingleParam('deadline')
             elap_time = self.CreateSingleParam('rpn_time')
             threshold = self.CreateSingleParam('rpn_threshold')
 
-            blobs_in += [self.deadline, elap_time, threshold]
+            blobs_in += [deadline, elap_time, threshold]
 
         outputs = self.net.Python(
             CollectAndDistributeFpnRpnProposalsOp(self.train).forward

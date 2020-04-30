@@ -525,8 +525,9 @@ def add_stage_with_skip(
         prefix_offset = offset
     )
 
+    deadline = model.CreateSingleParam('deadline')
     threshold = model.CreateSingleParam(prefix + '_threshold')
-    s = brew.skip(model, [model.deadline, elap_time, threshold],
+    s = brew.skip(model, [deadline, elap_time, threshold],
         submodel.net.external_inputs, submodel,
         [prefix + '_skip'], [s], [blob_in])
 
